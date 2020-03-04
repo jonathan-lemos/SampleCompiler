@@ -4,17 +4,55 @@ using System.Linq;
 
 namespace SampleSemanalyzer
 {
-    public class SemanalyzerState
+    public static class VarTab
     {
-        public IList<IDictionary<string, Type>> VarTab { get; }
-
-        public SemanalyzerState()
-        {
-            VarTab = new List<IDictionary<string, Type>>
+        public static readonly IList<IDictionary<string, TypeSpec>> Scopes =
+            new List<IDictionary<string, TypeSpec>>
             {
-                new Dictionary<string, Type>()
+                new Dictionary<string, TypeSpec>()
             };
+
+        public static void Clear()
+        {
+            Scopes.Clear();
+            PushScope();
         }
+
+        public static void PushScope()
+        {
+            Scopes.Add(new Dictionary<string, TypeSpec>());
+        }
+
+        public static void PopScope()
+        {
+            Scopes.RemoveAt(Scopes.Count - 1);
+        }
+
+        public static void Add(string id, TypeSpec type)
+        {
+            if (Scopes.Last().ContainsKey(id))
+            {
+                throw new ArgumentException(id);
+            }
+
+            Scopes.Last()[id] = type;
+        }
+
+        public static TypeSpec Get(string id) =>
+            Scopes.Reverse().First(scope => scope.ContainsKey(id))[id];
+    }
+
+    public static class FuncState
+    {
+        public readonly static Stack<TypeSpec> CurrentReturn = new Stack<TypeSpec>();
+
+        public static void Clear() => CurrentReturn.Clear();
+
+        public static void PushFunc(TypeSpec returnType) => CurrentReturn.Push(returnType);
+
+        public static TypeSpec PopFunc() => CurrentReturn.Pop();
+
+        public static TypeSpec Top => CurrentReturn.Peek();
     }
 
     public class Start
@@ -23,7 +61,7 @@ namespace SampleSemanalyzer
 
         public void Verify()
         {
-            Statements.ForEach(Verify);
+            Statements.ForEach(stmt => stmt.Verify());
         }
     }
 
@@ -37,30 +75,74 @@ namespace SampleSemanalyzer
         public Condition Condition { get; set; }
         public IList<Stmt> IfBlock { get; set; }
         public IList<Stmt>? ElseBlock { get; set; }
+
+        public void Verify()
+        {
+            Condition.Verify();
+            IfBlock.ForEach(stmt => stmt.Verify());
+            ElseBlock.ForEach(stmt => stmt.Verify());
+        }
     }
 
     public class WhileStmt : Stmt
     {
         public Condition Condition { get; set; }
-        public IList<Stmt> Stmt { get; set; }
+        public IList<Stmt> Statements { get; set; }
+
+        public void Verify()
+        {
+            Condition.Verify();
+            Statements.ForEach(stmt => stmt.Verify());
+        }
     }
 
     public class AssgnStmt : Stmt
     {
         public string Id { get; set; }
         public Expr Expr { get; set; }
+
+        public void Verify()
+        {
+            var exprType = Expr.Verify();
+            var assgnType = VarTab.Get(Id);
+            if (exprType != assgnType)
+            {
+                throw new ArgumentException(assgnType.ToString());
+            }
+        }
     }
 
     public class ReturnStmt : Stmt
     {
         public Expr Expr { get; set; }
+
+        public void Verify()
+        {
+            var retType = FuncState.Top;
+            var exprType = Expr.Verify();
+            if (retType != exprType)
+            {
+                throw new ArgumentException(retType.ToString());
+            }
+        }
     }
 
     public class VardecStmt : Stmt
     {
         public string Id { get; set; }
-        public TypeBase Type { get; set; }
+        public TypeSpec Type { get; set; }
         public Expr Expr { get; set; }
+
+        public void Verify()
+        {
+            var exprType = Expr.Verify();
+            if (Type != exprType)
+            {
+                throw new ArgumentException(Type.ToString());
+            }
+
+            VarTab.Add(Id, exprType);
+        }
     }
 
     public class Param
@@ -68,12 +150,62 @@ namespace SampleSemanalyzer
         public string Id { get; set; }
         public TypeSpec Type { get; set; }
         public Expr? Default { get; set; }
+
+        public void Verify()
+        {
+            if (Default == null)
+            {
+                return;
+            }
+
+            var exprType = Default.Verify();
+            if (Type != exprType)
+            {
+                throw new ArgumentException();
+            }
+        }
     }
 
     public class TypeSpec
     {
         public TypeBase Base { get; set; }
         public int ArrayCount { get; set; }
+
+        public static bool operator ==(TypeSpec t1, TypeSpec t2)
+        {
+            if (ReferenceEquals(t1, t2)) return true;
+            if (ReferenceEquals(t1, null)) return false;
+            // to shut up resharper
+            if (ReferenceEquals(t2, null)) return false;
+
+            if (t1.ArrayCount != t2.ArrayCount) return false;
+
+            switch (t1.Base)
+            {
+                case Primitive p1:
+                {
+                    if (!(t2.Base is Primitive p2))
+                    {
+                        return false;
+                    }
+
+                    return p1.Type == "ANY" || p2.Type == "ANY" || p1.Type == p2.Type;
+                }
+                case Function f1:
+                {
+                    if (!(t2.Base is Function f2))
+                    {
+                        return false;
+                    }
+
+                    return f1.Types.SequenceEqual(f2.Types) && f1.ReturnType == f2.ReturnType;
+                }
+                default:
+                    return false;
+            }
+        }
+
+        public static bool operator !=(TypeSpec t1, TypeSpec t2) => !(t1 == t2);
     }
 
     public interface TypeBase
@@ -93,7 +225,7 @@ namespace SampleSemanalyzer
 
     public interface Expr
     {
-        TypeBase Verify();
+        TypeSpec Verify();
     }
 
     public class Condition : Expr
@@ -103,6 +235,33 @@ namespace SampleSemanalyzer
         public Expr Right { get; set; }
         public string? Binop { get; set; }
         public Condition? Next { get; set; }
+
+        public TypeSpec Verify()
+        {
+            var lhsType = Left.Verify();
+            var rhsType = Right.Verify();
+
+            if (lhsType != rhsType)
+            {
+                throw new ArgumentException(lhsType.ToString());
+            }
+
+            if ((Relop.Contains("<") || Relop.Contains(">")) && lhsType.ArrayCount != 0)
+            {
+                throw new ArgumentException();
+            }
+
+            Next?.Verify();
+
+            return new TypeSpec
+            {
+                ArrayCount = 0,
+                Base = new Primitive
+                {
+                    Type = "bool"
+                }
+            };
+        }
     }
 
     public class AddExpr : Expr
@@ -110,11 +269,52 @@ namespace SampleSemanalyzer
         public Term Term { get; set; }
         public string? Addop { get; set; }
         public AddExpr? Next { get; set; }
+
+        public TypeSpec Verify()
+        {
+            var termType = Term.Verify();
+            var nextType = Next?.Verify();
+            if (nextType != null && termType != nextType)
+            {
+                throw new ArgumentException();
+            }
+
+            if (nextType != null && termType.ArrayCount != 0)
+            {
+                throw new ArgumentException();
+            }
+
+            return termType;
+        }
     }
 
     public class ArrayExpr : Expr
     {
         public IList<Expr> Entries { get; set; }
+
+        public TypeSpec Verify()
+        {
+            var types = Entries.Select(x => x.Verify()).ToList();
+            if (types.ToHashSet().Count > 1)
+            {
+                throw new ArgumentException();
+            }
+
+            return types.ToHashSet().Count == 1
+                ? new TypeSpec
+                {
+                    ArrayCount = types.First().ArrayCount + 1,
+                    Base = types.First().Base
+                }
+                : new TypeSpec
+                {
+                    ArrayCount = 1,
+                    Base = new Primitive
+                    {
+                        Type = "ANY"
+                    }
+                };
+        }
     }
 
     public class FuncExpr : Expr
@@ -122,6 +322,11 @@ namespace SampleSemanalyzer
         public IList<Param> Params { get; set; }
         public TypeBase ReturnType { get; set; }
         public IList<Stmt> Statements { get; set; }
+
+        public TypeSpec Verify()
+        {
+            throw new NotImplementedException();
+        }
     }
 
     public class Term
@@ -129,6 +334,11 @@ namespace SampleSemanalyzer
         public Factor Factor { get; set; }
         public string? Mulop { get; set; }
         public Term? Next { get; set; }
+
+        public TypeSpec Verify()
+        {
+            throw new NotImplementedException();
+        }
     }
 
     public interface Factor
@@ -140,12 +350,22 @@ namespace SampleSemanalyzer
     {
         public string Id { get; set; }
         public IList<Expr> ArrayIndex { get; set; }
+
+        public TypeBase Verify()
+        {
+            throw new NotImplementedException();
+        }
     }
 
     public class Call : Factor
     {
         public string Id { get; set; }
         public IList<Arg> Args { get; set; }
+
+        public TypeBase Verify()
+        {
+            throw new NotImplementedException();
+        }
     }
 
     public class Num : Factor
@@ -269,7 +489,7 @@ namespace SampleSemanalyzer
             return new WhileStmt
             {
                 Condition = cond,
-                Stmt = stmt
+                Statements = stmt
             };
         }
 
@@ -511,7 +731,7 @@ namespace SampleSemanalyzer
 
             return new Term
             {
-                Factor = factor;
+                Factor = factor
             };
         }
 
