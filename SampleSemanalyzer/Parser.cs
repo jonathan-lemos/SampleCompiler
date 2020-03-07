@@ -2,20 +2,67 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
+// below disable certain resharper warnings
+
+// ReSharper disable UnusedAutoPropertyAccessor.Global
+// ReSharper disable InconsistentNaming
+// ReSharper disable NonReadonlyMemberInGetHashCode
+
 namespace SampleSemanalyzer
 {
     public static class VarTab
     {
-        public static readonly IList<IDictionary<string, TypeSpec>> Scopes =
-            new List<IDictionary<string, TypeSpec>>
-            {
-                new Dictionary<string, TypeSpec>()
-            };
+        public static readonly IList<IDictionary<string, TypeSpec>> Scopes = new List<IDictionary<string, TypeSpec>>();
 
-        public static void Clear()
+        public static IList<IDictionary<string, TypeSpec>> Clear()
         {
             Scopes.Clear();
             PushScope();
+
+            Add("print", new TypeSpec
+            {
+                Base = new Function
+                {
+                    ReturnType = TypeSpec.OfPrimitive("none"),
+                    Types = new HashSet<Param>
+                    {
+                        new Param
+                        {
+                            Id = "x",
+                            Type = TypeSpec.OfPrimitive("ANY")
+                        }
+                    }
+                }
+            });
+
+            Add("readInt", new TypeSpec
+            {
+                Base = new Function
+                {
+                    ReturnType = TypeSpec.OfPrimitive("int"),
+                    Types = new HashSet<Param>()
+                }
+            });
+
+            Add("readFloat", new TypeSpec
+            {
+                Base = new Function
+                {
+                    ReturnType = TypeSpec.OfPrimitive("float"),
+                    Types = new HashSet<Param>()
+                }
+            });
+
+            Add("readBool", new TypeSpec
+            {
+                Base = new Function
+                {
+                    ReturnType = TypeSpec.OfPrimitive("bool"),
+                    Types = new HashSet<Param>()
+                }
+            });
+
+            return Scopes;
         }
 
         public static void PushScope()
@@ -61,6 +108,7 @@ namespace SampleSemanalyzer
 
         public void Verify()
         {
+            VarTab.Clear();
             Statements.ForEach(stmt => stmt.Verify());
         }
     }
@@ -145,6 +193,26 @@ namespace SampleSemanalyzer
         }
     }
 
+    public class FundecStmt : Stmt
+    {
+        public string Id { get; set; }
+        public ISet<Param> Params { get; set; }
+        public IList<Stmt> Stmts { get; set; }
+        public TypeSpec ReturnType { get; set; }
+
+        public void Verify()
+        {
+            VarTab.Add(Id, new TypeSpec
+            {
+                Base = new Function
+                {
+                    Types = Params,
+                    ReturnType = ReturnType
+                }
+            });
+        }
+    }
+
     public class Param
     {
         public string Id { get; set; }
@@ -166,10 +234,22 @@ namespace SampleSemanalyzer
         }
     }
 
-    public class TypeSpec
+    public class TypeSpec : IEquatable<TypeSpec>
     {
         public TypeBase Base { get; set; }
         public int ArrayCount { get; set; }
+
+        public static TypeSpec OfPrimitive(string prim) => new TypeSpec
+        {
+            ArrayCount = 0,
+            Base = new Primitive
+            {
+                Type = prim
+            }
+        };
+
+        public bool IsArithmetic => ArrayCount == 0 && Base is Primitive prim &&
+                                    new HashSet<string> {"int", "float", "bool"}.Contains(prim.Type);
 
         public static bool operator ==(TypeSpec t1, TypeSpec t2)
         {
@@ -206,6 +286,29 @@ namespace SampleSemanalyzer
         }
 
         public static bool operator !=(TypeSpec t1, TypeSpec t2) => !(t1 == t2);
+
+        public override bool Equals(object obj)
+        {
+            if (ReferenceEquals(null, obj)) return false;
+            if (ReferenceEquals(this, obj)) return true;
+            if (obj.GetType() != this.GetType()) return false;
+            return Equals((TypeSpec) obj);
+        }
+
+        public bool Equals(TypeSpec other)
+        {
+            if (ReferenceEquals(null, other)) return false;
+            if (ReferenceEquals(this, other)) return true;
+            return Equals(Base, other.Base) && ArrayCount == other.ArrayCount;
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                return ((Base != null ? Base.GetHashCode() : 0) * 397) ^ ArrayCount;
+            }
+        }
     }
 
     public interface TypeBase
@@ -220,7 +323,7 @@ namespace SampleSemanalyzer
     public class Function : TypeBase
     {
         public TypeSpec ReturnType { get; set; }
-        public IList<TypeSpec> Types { get; set; }
+        public ISet<Param> Types { get; set; }
     }
 
     public interface Expr
@@ -279,7 +382,7 @@ namespace SampleSemanalyzer
                 throw new ArgumentException();
             }
 
-            if (nextType != null && termType.ArrayCount != 0)
+            if (nextType != null && !termType.IsArithmetic)
             {
                 throw new ArgumentException();
             }
@@ -319,13 +422,26 @@ namespace SampleSemanalyzer
 
     public class FuncExpr : Expr
     {
-        public IList<Param> Params { get; set; }
-        public TypeBase ReturnType { get; set; }
+        public ISet<Param> Params { get; set; }
+        public TypeSpec ReturnType { get; set; }
         public IList<Stmt> Statements { get; set; }
 
         public TypeSpec Verify()
         {
-            throw new NotImplementedException();
+            Params.ForEach(par => par.Verify());
+            if (Params.Select(x => x.Id).ToList().Count != Params.Select(x => x.Id).ToHashSet().Count)
+            {
+                throw new ArgumentException();
+            }
+
+            return new TypeSpec
+            {
+                Base = new Function
+                {
+                    ReturnType = ReturnType,
+                    Types = Params
+                }
+            };
         }
     }
 
@@ -337,13 +453,26 @@ namespace SampleSemanalyzer
 
         public TypeSpec Verify()
         {
-            throw new NotImplementedException();
+            var type1 = Factor.Verify();
+            var type2 = Next?.Verify();
+
+            if (type2 != null && type1 != type2)
+            {
+                throw new ArgumentException();
+            }
+
+            if (type2 != null && !type1.IsArithmetic)
+            {
+                throw new ArgumentException();
+            }
+
+            return type1;
         }
     }
 
     public interface Factor
     {
-        TypeBase Verify();
+        TypeSpec Verify();
     }
 
     public class Var : Factor
@@ -351,36 +480,99 @@ namespace SampleSemanalyzer
         public string Id { get; set; }
         public IList<Expr> ArrayIndex { get; set; }
 
-        public TypeBase Verify()
+        public TypeSpec Verify()
         {
-            throw new NotImplementedException();
+            var baseType = VarTab.Get(Id);
+            if (baseType.ArrayCount < ArrayIndex.Count)
+            {
+                throw new ArgumentException();
+            }
+
+            return new TypeSpec
+            {
+                ArrayCount = baseType.ArrayCount - ArrayIndex.Count,
+                Base = baseType.Base
+            };
         }
     }
 
-    public class Call : Factor
+    public class Call : Stmt, Factor
     {
         public string Id { get; set; }
         public IList<Arg> Args { get; set; }
 
-        public TypeBase Verify()
+        public TypeSpec Verify()
         {
-            throw new NotImplementedException();
+            var baseType = VarTab.Get(Id);
+            if (baseType.ArrayCount > 0 || !(baseType.Base is Function func))
+            {
+                throw new ArgumentException();
+            }
+
+            var argIds = Args.Select(x => x.Id).ToHashSet();
+            var parIds = func.Types.Select(x => x.Id).ToHashSet();
+
+            if (!parIds.IsSupersetOf(argIds))
+            {
+                throw new ArgumentException();
+            }
+
+            if (!func.Types.Where(par => par.Default != null).Select(par => par.Id).ToHashSet().IsSupersetOf(parIds.Except(argIds)))
+            {
+                throw new ArgumentException();
+            }
+            
+            (from arg in Args
+                join par in func.Types on arg.Id equals par.Id
+                select (arg, par)).ForEach(tup =>
+            {
+                var (arg, par) = tup;
+                if (arg.Expr.Verify() != par.Type)
+                {
+                    throw new ArgumentException();
+                }
+            });
+
+            return func.ReturnType;
+        }
+
+        void Stmt.Verify()
+        {
+            Verify();
         }
     }
 
     public class Num : Factor
     {
-        public int Num { get; set; }
+        public int Number { get; set; }
+
+        public TypeSpec Verify() => new TypeSpec
+        {
+            Base = new Primitive
+            {
+                Type = "int"
+            }
+        };
     }
 
     public class Float : Factor
     {
-        public double Float { get; set; }
+        public double Number { get; set; }
+
+        public TypeSpec Verify() => new TypeSpec
+        {
+            Base = new Primitive
+            {
+                Type = "int"
+            }
+        };
     }
 
     public class ParenFactor : Factor
     {
         public Expr Expr { get; set; }
+
+        public TypeSpec Verify() => Expr.Verify();
     }
 
     public class Arg
@@ -403,7 +595,20 @@ namespace SampleSemanalyzer
             return _tokens.Dequeue();
         }
 
-        private Token Next => _tokens.Peek();
+        private Token Next
+        {
+            get
+            {
+                try
+                {
+                    return _tokens.Peek();
+                }
+                catch (Exception)
+                {
+                    throw new ArgumentException();
+                }
+            }
+        }
 
         private Parser(Queue<Token> tokens)
         {
@@ -449,19 +654,26 @@ namespace SampleSemanalyzer
             "while" => ParseWhileStmt(),
             "return" => ParseReturnStmt(),
             "let" => ParseVardecStmt(),
+            "fun" => ParseFundecStmt(),
+            "id" => ParseIdStmt(),
             _ => throw new ArgumentException(Next.ToString())
         };
 
         public IfStmt ParseIfStmt()
         {
             Read("if");
-            var cond = ParseCondition();
+            var tmp = ParseCondition();
+            if (!(tmp is Condition cond))
+            {
+                throw new ArgumentException();
+            }
+
             Read("then");
-            var stmt = ParseStmt();
+            var stmt = ParseStmtList();
             if (Next.Category == "else")
             {
                 Read("else");
-                var elseStmt = ParseStmt();
+                var elseStmt = ParseStmtList();
                 Read("fi");
                 return new IfStmt
                 {
@@ -482,9 +694,13 @@ namespace SampleSemanalyzer
         public WhileStmt ParseWhileStmt()
         {
             Read("while");
-            var cond = ParseCondition();
+            if (!(ParseCondition() is Condition cond))
+            {
+                throw new ArgumentException();
+            }
+
             Read("do");
-            var stmt = ParseStmt();
+            var stmt = ParseStmtList();
             Read("done");
             return new WhileStmt
             {
@@ -493,16 +709,69 @@ namespace SampleSemanalyzer
             };
         }
 
-        public AssgnStmt ParseAssgnStmt()
+        public FundecStmt ParseFundecStmt()
         {
-            var id = Read("id");
+            Read("fun");
+            var id = Read("id").Lexeme;
+            Read("(");
+            var pars = ParseParams();
+            Read(")");
+            Read(":");
+            var type = ParseTypeSpec();
             Read("<-");
-            var expr = ParseExpr();
-            Read(";");
-            return new AssgnStmt
+            Read("begin");
+            var stmts = ParseStmtList();
+            Read("end");
+            return new FundecStmt
             {
-                Id = id.Lexeme,
-                Expr = expr
+                Id = id,
+                Params = pars,
+                ReturnType = type,
+                Stmts = stmts
+            };
+        }
+
+        public Stmt ParseIdStmt()
+        {
+            var id = Read("id").Lexeme;
+            if (Next.Category == "<-")
+            {
+                Read("<-");
+                var expr = ParseExpr();
+                Read(";");
+                return new AssgnStmt
+                {
+                    Id = id,
+                    Expr = expr
+                };
+            }
+
+            Read("(");
+            var args = new List<Arg>();
+            while (true)
+            {
+                try
+                {
+                    args.Add(ParseArg());
+                    if (Next.Category != ",")
+                    {
+                        break;
+                    }
+
+                    Read(",");
+                }
+                catch (ArgumentException)
+                {
+                    break;
+                }
+            }
+
+            Read(")");
+            Read(";");
+            return new Call
+            {
+                Id = id,
+                Args = args
             };
         }
 
@@ -565,7 +834,7 @@ namespace SampleSemanalyzer
                 case "(":
                 {
                     Read("(");
-                    var types = ParseTypes();
+                    var types = ParseParams();
                     Read(")");
                     Read(":");
                     var typeSpec = ParseTypeSpec();
@@ -646,9 +915,9 @@ namespace SampleSemanalyzer
             };
         }
 
-        public IList<Param> ParseParams()
+        public ISet<Param> ParseParams()
         {
-            var ret = new List<Param>();
+            var ret = new HashSet<Param>();
             while (Next.Category != ")")
             {
                 ret.Add(ParseParam());
@@ -691,6 +960,38 @@ namespace SampleSemanalyzer
         public Expr ParseCondition()
         {
             var addExpr = ParseAddExpr();
+            if (Next.Category != "relop")
+            {
+                return addExpr;
+            }
+
+            var relop = Read("relop").Lexeme;
+            var addExpr2 = ParseAddExpr();
+
+            if (Next.Category != "binop")
+            {
+                return new Condition
+                {
+                    Left = addExpr,
+                    Relop = relop,
+                    Right = addExpr2
+                };
+            }
+
+            var binop = Read("binop").Lexeme;
+            if (!(ParseCondition() is Condition cond2))
+            {
+                throw new ArgumentException();
+            }
+
+            return new Condition
+            {
+                Left = addExpr,
+                Relop = relop,
+                Right = addExpr2,
+                Binop = binop,
+                Next = cond2
+            };
         }
 
         public AddExpr ParseAddExpr()
@@ -742,9 +1043,9 @@ namespace SampleSemanalyzer
                 case "id":
                     return ParseIdFactor();
                 case "num":
-                    return new Num {Num = int.Parse(Read("int").Lexeme)};
+                    return new Num {Number = int.Parse(Read("num").Lexeme)};
                 case "float":
-                    return new Float {Float = double.Parse(Read("float").Lexeme)};
+                    return new Float {Number = double.Parse(Read("float").Lexeme)};
                 case "(":
                 {
                     Read("(");
@@ -796,6 +1097,7 @@ namespace SampleSemanalyzer
 
                         Read(",");
                     }
+                    Read(")");
 
                     return new Call
                     {

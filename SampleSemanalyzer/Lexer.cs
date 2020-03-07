@@ -10,6 +10,8 @@ namespace SampleSemanalyzer
     {
         public string Lexeme { get; set; }
         public string Category { get; set; }
+
+        public override string ToString() => $"({Category}, {Lexeme})";
     }
 
     public static class Lexer
@@ -26,16 +28,16 @@ namespace SampleSemanalyzer
                 (@"int|float|bool|none", "primitive"),
                 (@"and|or|xor|nor|nand", "boolop"),
                 (@">=|<=|==|<|>|!=", "relop"),
-                (@"if|then|fi|while|do|done|let|<-|\(|\)|\[|\]|;|:|,|\{|\}", null)
+                (@"if|then|fi|while|do|done|let|fun|begin|end|return|<-|->|\(|\)|\[|\]|;|:|,", null)
             }.Select(x => (new Regex(x.Item1), x.Item2)).ToList();
 
-            foreach (var word in input.Split(new char[] {' ', '\t', '\n'}))
+            foreach (var word in input.Split(' ', '\t', '\n'))
             {
                 var buf = word;
 
                 while (buf != "")
                 {
-                    var longest = ("Error", buf.Substring(1));
+                    var longest = ("Error", buf.Substring(0, 1));
                     
                     foreach (var x in patDict)
                     {
@@ -43,7 +45,7 @@ namespace SampleSemanalyzer
                         var mat = re.Match(buf);
                         if (mat.Success && mat.Index == 0 && mat.Length >= longest.Item2.Length)
                         {
-                            longest = (category ?? word.Substring(mat.Length), word.Substring(mat.Length));
+                            longest = (category ?? buf.Substring(0, mat.Length), buf.Substring(0, mat.Length));
                         }
                     }
 
