@@ -18,13 +18,12 @@ namespace SampleSemanalyzer
      * fundec-stmt -> fun id ( params ) : type-spec <- begin stmt-list end
      * type-spec   -> type-base | [ type-spec ]
      * type-base   -> primitive | ( types ) : type-spec
-     * array-spec  -> [ ] array-spec | empty
      * types       -> type-list | empty
      * type-list   -> type-spec , types | type-spec
      * expr        -> array-expr | add-expr | condition | func-expr
      * condition   -> add-expr relop add-expr | add-expr relop add-expr binop condition
      * add-expr    -> term addop add-expr | term
-     * array-expr  -> [ exprs ]
+     * array-expr  -> [ exprs ] array-spec
      * exprs       -> expr-list | empty
      * expr-list   -> expr , expr-list | expr
      * func-expr   -> ( params ) : type-spec -> begin stmt-list end
@@ -33,8 +32,9 @@ namespace SampleSemanalyzer
      * param       -> id : type | id : type <- expr
      * term        -> factor mulop term | factor
      * factor      -> var | call | num | float | ( expr )
-     * var         -> id | var [ expr ]
-     * call        -> id ( args )
+     * var         -> id array-spec
+     * call        -> id ( args ) array-spec
+     * array-spec  -> [ expr ] array-spec | empty
      * args        -> arg-list | empty
      * arg-list    -> id : expr , arg-list | id : expr
      */

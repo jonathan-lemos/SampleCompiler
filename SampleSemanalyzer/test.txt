@@ -1,0 +1,8 @@
+let funding: int <- 5;
+funding <- 4;
+
+fun add(a: int, b: int) : [[int]] <- begin
+    return [[a + b, b + a], [funding, b]];
+end
+
+print(x: add(b: 2, a: funding * 4));

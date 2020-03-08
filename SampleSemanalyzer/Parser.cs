@@ -127,8 +127,12 @@ namespace SampleSemanalyzer
         public void Verify()
         {
             Condition.Verify();
+            VarTab.PushScope();
             IfBlock.ForEach(stmt => stmt.Verify());
+            VarTab.PopScope();
+            VarTab.PushScope();
             ElseBlock.ForEach(stmt => stmt.Verify());
+            VarTab.PopScope();
         }
     }
 
@@ -140,7 +144,9 @@ namespace SampleSemanalyzer
         public void Verify()
         {
             Condition.Verify();
+            VarTab.PushScope();
             Statements.ForEach(stmt => stmt.Verify());
+            VarTab.PopScope();
         }
     }
 
@@ -202,6 +208,13 @@ namespace SampleSemanalyzer
 
         public void Verify()
         {
+            FuncState.PushFunc(ReturnType);
+            VarTab.PushScope();
+            Params.ForEach(par => VarTab.Add(par.Id, par.Type));
+            Stmts.ForEach(stmt => stmt.Verify());
+            VarTab.PopScope();
+            FuncState.PopFunc();
+
             VarTab.Add(Id, new TypeSpec
             {
                 Base = new Function
@@ -257,6 +270,9 @@ namespace SampleSemanalyzer
             if (ReferenceEquals(t1, null)) return false;
             // to shut up resharper
             if (ReferenceEquals(t2, null)) return false;
+
+            if (t1.ArrayCount == 0 && t1.Base is Primitive x1 && x1.Type == "ANY" ||
+                t2.ArrayCount == 0 && t2.Base is Primitive x2 && x2.Type == "ANY") return true;
 
             if (t1.ArrayCount != t2.ArrayCount) return false;
 
@@ -315,15 +331,58 @@ namespace SampleSemanalyzer
     {
     }
 
-    public class Primitive : TypeBase
+    public class Primitive : TypeBase, IEquatable<Primitive>
     {
         public string Type { get; set; }
+
+        public bool Equals(Primitive other)
+        {
+            if (ReferenceEquals(null, other)) return false;
+            if (ReferenceEquals(this, other)) return true;
+            return Type == other.Type;
+        }
+
+        public override bool Equals(object obj)
+        {
+            if (ReferenceEquals(null, obj)) return false;
+            if (ReferenceEquals(this, obj)) return true;
+            if (obj.GetType() != this.GetType()) return false;
+            return Equals((Primitive) obj);
+        }
+
+        public override int GetHashCode()
+        {
+            return (Type != null ? Type.GetHashCode() : 0);
+        }
     }
 
-    public class Function : TypeBase
+    public class Function : TypeBase, IEquatable<Function>
     {
         public TypeSpec ReturnType { get; set; }
         public ISet<Param> Types { get; set; }
+
+        public bool Equals(Function other)
+        {
+            if (ReferenceEquals(null, other)) return false;
+            if (ReferenceEquals(this, other)) return true;
+            return Equals(ReturnType, other.ReturnType) && Equals(Types, other.Types);
+        }
+
+        public override bool Equals(object obj)
+        {
+            if (ReferenceEquals(null, obj)) return false;
+            if (ReferenceEquals(this, obj)) return true;
+            if (obj.GetType() != this.GetType()) return false;
+            return Equals((Function) obj);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                return ((ReturnType != null ? ReturnType.GetHashCode() : 0) * 397) ^ (Types != null ? Types.GetHashCode() : 0);
+            }
+        }
     }
 
     public interface Expr
@@ -424,10 +483,17 @@ namespace SampleSemanalyzer
     {
         public ISet<Param> Params { get; set; }
         public TypeSpec ReturnType { get; set; }
-        public IList<Stmt> Statements { get; set; }
+        public IList<Stmt> Stmts { get; set; }
 
         public TypeSpec Verify()
         {
+            FuncState.PushFunc(ReturnType);
+            VarTab.PushScope();
+            Params.ForEach(par => VarTab.Add(par.Id, par.Type));
+            Stmts.ForEach(stmt => stmt.Verify());
+            VarTab.PopScope();
+            FuncState.PopFunc();
+
             Params.ForEach(par => par.Verify());
             if (Params.Select(x => x.Id).ToList().Count != Params.Select(x => x.Id).ToHashSet().Count)
             {
@@ -517,11 +583,12 @@ namespace SampleSemanalyzer
                 throw new ArgumentException();
             }
 
-            if (!func.Types.Where(par => par.Default != null).Select(par => par.Id).ToHashSet().IsSupersetOf(parIds.Except(argIds)))
+            if (!func.Types.Where(par => par.Default != null).Select(par => par.Id).ToHashSet()
+                .IsSupersetOf(parIds.Except(argIds)))
             {
                 throw new ArgumentException();
             }
-            
+
             (from arg in Args
                 join par in func.Types on arg.Id equals par.Id
                 select (arg, par)).ForEach(tup =>
@@ -794,6 +861,7 @@ namespace SampleSemanalyzer
             var type = ParseTypeSpec();
             Read("<-");
             var expr = ParseExpr();
+            Read(";");
             return new VardecStmt
             {
                 Id = id.Lexeme,
@@ -911,7 +979,7 @@ namespace SampleSemanalyzer
             {
                 Params = par,
                 ReturnType = type,
-                Statements = stmts
+                Stmts = stmts
             };
         }
 
@@ -1018,7 +1086,7 @@ namespace SampleSemanalyzer
         public Term ParseTerm()
         {
             var factor = ParseFactor();
-            if (Next.Category == "factor")
+            if (Next.Category == "mulop")
             {
                 var mulop = Read("mulop").Lexeme;
                 var term = ParseTerm();
@@ -1097,6 +1165,7 @@ namespace SampleSemanalyzer
 
                         Read(",");
                     }
+
                     Read(")");
 
                     return new Call
